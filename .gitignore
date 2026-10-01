@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Local data: the database, the index and downloaded collections
+data/*
+!data/sample.jsonl
+
+# Editors and OS
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
