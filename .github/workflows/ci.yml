@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python }}, SQLite)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+
+  postgres:
+    name: Tests (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: papersearch
+          POSTGRES_PASSWORD: papersearch
+          POSTGRES_DB: papersearch
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U papersearch"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://papersearch:papersearch@localhost:5432/papersearch
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev,postgres]"
+      - run: pytest -q
+
+  docker:
+    name: Docker Compose smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose up -d --build
+      - name: Wait for the server
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -fs http://localhost:8000/health; then exit 0; fi
+            sleep 2
+          done
+          docker compose logs
+          exit 1
+      - name: Search through the API
+        run: |
+          curl -fs "http://localhost:8000/api/search?q=neural+networks" \
+            | python3 -c "import json, sys; body = json.load(sys.stdin); assert body['total'] > 0, body; print(body['total'], 'matches')"
+      - name: Stop
+        if: always()
+        run: docker compose down -v
