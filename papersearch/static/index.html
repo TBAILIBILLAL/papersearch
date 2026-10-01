@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PaperSearch</title>
+<style>
+  :root {
+    --bg: #f7f8fa; --panel: #ffffff; --text: #1c2430; --muted: #5f6b7a; --line: #dfe4ea;
+    --accent: #1f4e9c; --accent-soft: #e8effa; --mark: #ffe58a; --shadow: 0 1px 3px rgba(20, 30, 50, .08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161c; --panel: #1a2029; --text: #e6eaf0; --muted: #98a4b3; --line: #2b3440;
+      --accent: #7fb0ff; --accent-soft: #1f2b3d; --mark: #6b5a12; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 40px 16px 64px; }
+  header h1 { margin: 0; font-size: 30px; letter-spacing: -.5px; }
+  header h1 span { color: var(--accent); }
+  header p { margin: 4px 0 22px; color: var(--muted); font-size: 14.5px; }
+
+  form { display: flex; gap: 8px; flex-wrap: wrap; position: relative; }
+  .field { position: relative; flex: 1 1 320px; }
+  input[type=search] {
+    width: 100%; padding: 12px 14px; font: inherit; color: inherit; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); outline: none;
+  }
+  input[type=search]:focus, select:focus, button:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  select, button {
+    font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 0 12px; height: 48px; outline: none;
+  }
+  button { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 0 20px; cursor: pointer; }
+  @media (prefers-color-scheme: dark) { button { color: #0d1420; } }
+
+  #suggestions {
+    position: absolute; z-index: 5; top: 52px; left: 0; right: 0; margin: 0; padding: 4px; list-style: none;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(20, 30, 50, .16);
+  }
+  #suggestions[hidden] { display: none; }
+  #suggestions li { padding: 7px 10px; border-radius: 6px; cursor: pointer; }
+  #suggestions li.active, #suggestions li:hover { background: var(--accent-soft); }
+
+  #meta { margin: 18px 2px 6px; color: var(--muted); font-size: 14px; min-height: 21px; }
+  #meta b { color: var(--text); }
+  #meta a { color: var(--accent); }
+  #results { list-style: none; margin: 0; padding: 0; }
+  #results li { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-top: 10px; box-shadow: var(--shadow); }
+  #results a { color: var(--accent); font-size: 17.5px; font-weight: 600; text-decoration: none; }
+  #results a:hover { text-decoration: underline; }
+  .byline { color: var(--muted); font-size: 13.5px; margin: 3px 0 6px; }
+  .tag { display: inline-block; background: var(--accent-soft); color: var(--accent); border-radius: 5px; padding: 0 6px; font-size: 12.5px; font-weight: 600; margin-right: 6px; }
+  .snippet { margin: 0; font-size: 15px; }
+  mark { background: var(--mark); color: inherit; border-radius: 3px; padding: 0 1px; }
+  #more { display: block; margin: 18px auto 0; background: var(--panel); color: var(--accent); border-color: var(--line); }
+  #more[hidden] { display: none; }
+  .empty { text-align: center; color: var(--muted); padding: 36px 0; }
+  footer { margin-top: 36px; color: var(--muted); font-size: 13px; text-align: center; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Paper<span>Search</span></h1>
+    <p id="tagline">Search computer science papers from arXiv.</p>
+  </header>
+
+  <form id="form" autocomplete="off">
+    <div class="field">
+      <input id="query" type="search" placeholder="Try: graph neural networks for traffic" aria-label="Search query"
+             aria-autocomplete="list" aria-controls="suggestions">
+      <ul id="suggestions" role="listbox" hidden></ul>
+    </div>
+    <select id="category" aria-label="Category"><option value="">All categories</option></select>
+    <button type="submit">Search</button>
+  </form>
+
+  <div id="meta" aria-live="polite"></div>
+  <ol id="results"></ol>
+  <button id="more" type="button" hidden>Show more results</button>
+
+  <footer id="footer"></footer>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const queryInput = $("query"), categorySelect = $("category"), suggestionList = $("suggestions");
+const meta = $("meta"), resultList = $("results"), moreButton = $("more");
+const PAGE = 10;
+let offset = 0, total = 0, activeSuggestion = -1, suggestTimer = null, requestNumber = 0, typedText = "", exactQuery = null;
+
+async function getJson(path, params) {
+  const response = await fetch(path + "?" + new URLSearchParams(params));
+  if (!response.ok) throw new Error("Request failed: " + response.status);
+  return response.json();
+}
+
+// Text arrives as pieces marked hit or not, so nothing from the data is ever inserted as HTML.
+function renderPieces(parent, pieces) {
+  for (const piece of pieces) {
+    if (piece.hit) {
+      const mark = document.createElement("mark");
+      mark.textContent = piece.text;
+      parent.appendChild(mark);
+    } else {
+      parent.appendChild(document.createTextNode(piece.text));
+    }
+  }
+}
+
+function renderResult(result) {
+  const item = document.createElement("li");
+
+  const link = document.createElement("a");
+  link.href = result.url;
+  link.target = "_blank";
+  link.rel = "noopener";
+  renderPieces(link, result.title);
+  item.appendChild(link);
+
+  const byline = document.createElement("div");
+  byline.className = "byline";
+  const tag = document.createElement("span");
+  tag.className = "tag";
+  tag.textContent = result.category;
+  byline.appendChild(tag);
+  const authors = result.authors.split(", ");
+  const shown = authors.length > 4 ? authors.slice(0, 4).join(", ") + " and " + (authors.length - 4) + " more" : result.authors;
+  byline.appendChild(document.createTextNode(shown + " · " + result.published));
+  item.appendChild(byline);
+
+  const snippet = document.createElement("p");
+  snippet.className = "snippet";
+  renderPieces(snippet, result.snippet);
+  item.appendChild(snippet);
+  return item;
+}
+
+async function search(append) {
+  const q = queryInput.value.trim();
+  hideSuggestions();
+  if (!q) { meta.textContent = ""; resultList.replaceChildren(); moreButton.hidden = true; return; }
+  if (!append) offset = 0;
+
+  const params = { q, limit: PAGE, offset };
+  if (categorySelect.value) params.category = categorySelect.value;
+  if (exactQuery === q) params.correct = "false";  // the user asked for the words exactly as typed
+  const mine = ++requestNumber;
+  let data;
+  try {
+    data = await getJson("/api/search", params);
+  } catch (error) {
+    meta.textContent = "The search could not be completed. Please try again.";
+    return;
+  }
+  if (mine !== requestNumber) return;  // a newer search has started
+
+  if (!append) resultList.replaceChildren();
+  total = data.total;
+  for (const result of data.results) resultList.appendChild(renderResult(result));
+  offset += data.results.length;
+  moreButton.hidden = offset >= total || offset >= 1000;
+
+  meta.replaceChildren();
+  if (data.corrected_query) {
+    meta.appendChild(document.createTextNode("Showing results for "));
+    const fixed = document.createElement("b");
+    fixed.textContent = data.corrected_query;
+    meta.appendChild(fixed);
+    meta.appendChild(document.createTextNode(". "));
+    const original = document.createElement("a");
+    original.href = "#";
+    original.textContent = "Search instead for " + q;
+    original.addEventListener("click", (event) => { event.preventDefault(); exactQuery = q; search(false); });
+    meta.appendChild(original);
+    meta.appendChild(document.createTextNode(" · "));
+  }
+  meta.appendChild(document.createTextNode(total.toLocaleString() + (total === 1 ? " paper" : " papers") + " matched in " + data.took_ms + " ms"));
+  if (total === 0) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = "No papers match this search. Try fewer or different words.";
+    resultList.appendChild(empty);
+  }
+
+  const url = new URL(location.href);
+  url.searchParams.set("q", q);
+  if (categorySelect.value) url.searchParams.set("category", categorySelect.value); else url.searchParams.delete("category");
+  history.replaceState(null, "", url);
+}
+
+function hideSuggestions() {
+  suggestionList.hidden = true;
+  suggestionList.replaceChildren();
+  activeSuggestion = -1;
+}
+
+async function suggest() {
+  const typed = queryInput.value;
+  if (!typed.trim()) { hideSuggestions(); return; }
+  let data;
+  try { data = await getJson("/api/suggest", { q: typed }); } catch (error) { return; }
+  if (queryInput.value !== typed || document.activeElement !== queryInput) return;
+  suggestionList.replaceChildren();
+  activeSuggestion = -1;
+  for (const text of data.suggestions) {
+    const item = document.createElement("li");
+    item.setAttribute("role", "option");
+    item.textContent = text;
+    item.addEventListener("mousedown", (event) => { event.preventDefault(); queryInput.value = text; search(false); });
+    suggestionList.appendChild(item);
+  }
+  suggestionList.hidden = data.suggestions.length === 0;
+}
+
+function moveSuggestion(step) {
+  const items = suggestionList.children;
+  if (suggestionList.hidden || items.length === 0) return;
+  if (activeSuggestion >= 0) items[activeSuggestion].classList.remove("active");
+  const positions = items.length + 1;  // one extra position means "back to what was typed"
+  activeSuggestion = (activeSuggestion + 1 + step + positions) % positions - 1;
+  if (activeSuggestion < 0) { queryInput.value = typedText; return; }
+  items[activeSuggestion].classList.add("active");
+  queryInput.value = items[activeSuggestion].textContent;
+}
+
+queryInput.addEventListener("input", () => {
+  typedText = queryInput.value;
+  clearTimeout(suggestTimer);
+  suggestTimer = setTimeout(suggest, 120);
+});
+queryInput.addEventListener("keydown", (event) => {
+  if (event.key === "ArrowDown") { event.preventDefault(); moveSuggestion(1); }
+  else if (event.key === "ArrowUp") { event.preventDefault(); moveSuggestion(-1); }
+  else if (event.key === "Escape") { hideSuggestions(); }
+});
+queryInput.addEventListener("blur", () => setTimeout(hideSuggestions, 100));
+$("form").addEventListener("submit", (event) => { event.preventDefault(); clearTimeout(suggestTimer); search(false); });
+categorySelect.addEventListener("change", () => search(false));
+moreButton.addEventListener("click", () => search(true));
+
+async function start() {
+  try {
+    const [stats, categories] = await Promise.all([getJson("/api/stats", {}), getJson("/api/categories", {})]);
+    $("tagline").textContent = "Search " + stats.documents.toLocaleString() + " computer science papers from arXiv.";
+    $("footer").textContent = stats.terms.toLocaleString() + " terms · " + stats.postings.toLocaleString()
+      + " postings · ranked with BM25 on an inverted index built from scratch";
+    for (const category of categories.categories.slice(0, 40)) {
+      const option = document.createElement("option");
+      option.value = category.name;
+      option.textContent = category.name + " (" + category.papers.toLocaleString() + ")";
+      categorySelect.appendChild(option);
+    }
+  } catch (error) { /* the page still works without the extras */ }
+
+  const params = new URLSearchParams(location.search);
+  if (params.get("category")) categorySelect.value = params.get("category");
+  if (params.get("q")) { queryInput.value = params.get("q"); search(false); }
+}
+start();
+</script>
+</body>
+</html>
