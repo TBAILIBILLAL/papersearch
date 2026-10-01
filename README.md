@@ -1,6 +1,6 @@
 # PaperSearch
 
-[![CI](https://github.com/billy001-11/papersearch/actions/workflows/ci.yml/badge.svg)](https://github.com/billy001-11/papersearch/actions/workflows/ci.yml)
+[![CI](https://github.com/TBAILIBILLAL/papersearch/actions/workflows/ci.yml/badge.svg)](https://github.com/TBAILIBILLAL/papersearch/actions/workflows/ci.yml)
 
 A search engine for computer science papers, built from scratch in Python. It indexes
 arXiv titles and abstracts, ranks results with BM25, completes queries as you type and
@@ -92,7 +92,7 @@ flowchart LR
 Requires Python 3.10 or newer.
 
 ```bash
-git clone https://github.com/billy001-11/papersearch.git
+git clone https://github.com/TBAILIBILLAL/papersearch.git
 cd papersearch
 python -m venv .venv
 .venv\Scripts\activate          # on macOS or Linux: source .venv/bin/activate
